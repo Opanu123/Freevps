@@ -1,0 +1,33 @@
+name: Free VPS Auto Start
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  start-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Start tmate SSH
+        id: tmate
+        uses: mxschmitt/action-tmate@v3
+
+      - name: Save SSH to GitHub (ssh.txt)
+        if: always()
+        run: |
+          echo "${{ steps.tmate.outputs.ssh }}" > ssh.txt
+
+          git config --global user.name "ReconnectBot"
+          git config --global user.email "bot@example.com"
+
+          git clone https://github.com/${{ github.repository }} repo
+          cd repo
+
+          echo "${{ steps.tmate.outputs.ssh }}" > ssh.txt
+
+          git add ssh.txt
+          git commit -m "Updated SSH at $(date -u)"
+          git push origin main --force
