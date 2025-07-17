@@ -1,0 +1,58 @@
+name: Free VPS Auto Start with Backup and Minecraft Auto Start
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+jobs:
+  start-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Start tmate SSH
+      id: tmate
+      uses: mxschmitt/action-tmate@v3
+
+    - name: Wait for tmate to initialize
+      run: |
+        echo "Waiting for tmate session..."
+        sleep 15
+
+    - name: Extract SSH command and save to ssh.txt
+      run: |
+        SSH_COMMAND=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs \
+          | grep -oE 'ssh [^"]*tmate.io' | head -n 1)
+        echo "$SSH_COMMAND" > ssh.txt
+        echo "SSH_COMMAND=$SSH_COMMAND" >> $GITHUB_ENV
+
+    - name: Commit SSH command to repo
+      run: |
+        git config --global user.email "bot@example.com"
+        git config --global user.name "Auto VPS Bot"
+        git add ssh.txt
+        git commit -m "Update SSH command at $(date -u)" || echo "No changes to commit"
+        git push origin main || echo "Push failed or nothing to push"
+
+    - name: Prepare Minecraft backup folder
+      run: |
+        mkdir -p vps-backup/minecraft
+        if [ -d minecraft ]; then
+          cp -r minecraft/* vps-backup/minecraft/ || true
+        fi
+
+    - name: Commit Minecraft backup to repo
+      run: |
+        git add vps-backup/minecraft/
+        git commit -m "Auto backup Minecraft server at $(date -u)" || echo "No changes to commit"
+        git push origin main || echo "Push failed or nothing to push"
+
+    - name: Auto start Minecraft server
+      run: |
+        chmod +x vps-backup/minecraft/start-mc.sh || true
+        ./vps-backup/minecraft/start-mc.sh || echo "Minecraft server start script not found"
