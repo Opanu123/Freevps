@@ -3,31 +3,27 @@ import sys
 import dropbox
 
 ACCESS_TOKEN = os.getenv("DROPBOX_TOKEN")
-if not ACCESS_TOKEN:
-    print("❌ DROPBOX_TOKEN not found")
-    sys.exit(1)
-
 dbx = dropbox.Dropbox(ACCESS_TOKEN)
 
 def upload(local_path, remote_path):
     with open(local_path, "rb") as f:
         dbx.files_upload(f.read(), remote_path, mode=dropbox.files.WriteMode.overwrite)
-        print(f"✅ Uploaded {local_path} to Dropbox as {remote_path}")
+        print(f"Uploaded {local_path} to {remote_path}")
 
 def download(remote_path, local_path):
     with open(local_path, "wb") as f:
-        metadata, res = dbx.files_download(path="/" + remote_path)
+        metadata, res = dbx.files_download(path=remote_path)
         f.write(res.content)
-        print(f"✅ Downloaded {remote_path} from Dropbox to {local_path}")
+        print(f"Downloaded {remote_path} to {local_path}")
 
-if len(sys.argv) < 4:
-    print("Usage: dropbox_helper.py [upload|download] local_path remote_path")
-    sys.exit(1)
-
-cmd, local, remote = sys.argv[1], sys.argv[2], sys.argv[3]
-if cmd == "upload":
-    upload(local, remote)
-elif cmd == "download":
-    download(remote, local)
-else:
-    print("❌ Invalid command. Use upload or download.")
+if __name__ == "__main__":
+    if len(sys.argv) < 4:
+        print("Usage: dropbox_helper.py [upload|download] local_path remote_path")
+        sys.exit(1)
+    cmd, local, remote = sys.argv[1], sys.argv[2], sys.argv[3]
+    if cmd == "upload":
+        upload(local, remote)
+    elif cmd == "download":
+        download(remote, local)
+    else:
+        print("Invalid command")
