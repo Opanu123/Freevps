@@ -1,9 +1,9 @@
-name: Create VPS with Minecraft, Dropbox Backup & Discord Notify
+name: Create VPS with Minecraft + Dropbox Backup + Discord Notify
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
+    - cron: '0 */6 * * *'  # every 6 hours
 
 jobs:
   start-vps:
@@ -14,61 +14,55 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Create required directories
-        run: |
-          mkdir -p links minecraft plugins
+      - name: Install dependencies
+        run: sudo apt update && sudo apt install -y tmate openjdk-17-jre-headless wget zip python3 python3-pip
 
-      - name: Install dependencies & tmate
-        run: |
-          sudo apt update
-          sudo apt install -y openjdk-17-jre-headless wget unzip tmate python3 python3-pip
-          pip3 install dropbox
-
-      - name: Start tmate session and save SSH command
+      - name: Start tmate session and save SSH
         run: |
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' > links/ssh.txt
-          echo "✅ SSH info saved."
 
-      - name: Send SSH info to Discord
+      - name: Send SSH to Discord (fixed JSON escape)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          ssh_url=$(cat links/ssh.txt)
+          ssh_url=$(cat links/ssh.txt | tr -d '\n' | sed 's/"/\\"/g')
           curl -X POST -H "Content-Type: application/json" \
-            -d "{\"content\": \"🟢 Your VPS is ready! SSH: $ssh_url\"}" \
+            -d "{\"content\": \"🟢 VPS Ready! SSH: $ssh_url\"}" \
             "$DISCORD_WEBHOOK_URL"
 
-      - name: Download PaperMC 1.20.1 server jar
+      - name: Download Paper Minecraft 1.20.1
         run: |
-          wget -q https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar -O minecraft/server.jar
+          mkdir -p minecraft
+          wget https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar -O minecraft/server.jar
 
-      - name: Accept Minecraft EULA
+      - name: Accept EULA
         run: echo "eula=true" > minecraft/eula.txt
 
-      - name: Run server once to generate files
+      - name: Start server once to generate files
         run: |
           cd minecraft
           java -Xmx2G -Xms1G -jar server.jar nogui || true
 
-      - name: Download plugins EssentialsX and Geyser
+      - name: Download plugins (EssentialsX & Geyser)
         run: |
-          wget -q https://github.com/EssentialsX/Essentials/releases/latest/download/EssentialsX.jar -P minecraft/plugins
-          wget -q https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/standalone -O minecraft/plugins/Geyser.jar
+          mkdir -p minecraft/plugins
+          wget https://github.com/EssentialsX/Essentials/releases/latest/download/EssentialsX.jar -O minecraft/plugins/EssentialsX.jar
+          wget https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/standalone -O minecraft/plugins/Geyser.jar
 
       - name: Configure server.properties
         run: |
           echo "enable-command-block=true" >> minecraft/server.properties
-          echo "motd=A Free GitHub Minecraft Server" >> minecraft/server.properties
+          echo "motd=A Free GitHub VPS Minecraft Server" >> minecraft/server.properties
 
-      - name: Start Minecraft server (background)
+      - name: Start Minecraft server (background for 5 min)
         run: |
           cd minecraft
           java -Xmx2G -Xms1G -jar server.jar nogui &
+          sleep 300
 
-      - name: Wait 5 minutes for server startup
-        run: sleep 300
-
-      - name: Backup Minecraft world to zip
+      - name: Zip Minecraft world for backup
         run: |
           cd minecraft
           zip -r ../world_backup.zip world
@@ -76,12 +70,16 @@ jobs:
       - name: Upload backup to Dropbox
         run: |
           python3 dropbox_helper.py upload world_backup.zip /backups/world_backup_$(date +"%Y-%m-%d_%H-%M").zip
+        env:
+          DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
 
-      - name: Notify Discord backup done
+      - name: Commit SSH + backup info to repo
         run: |
-          curl -X POST -H "Content-Type: application/json" \
-            -d "{\"content\": \"✅ Minecraft world backed up and uploaded to Dropbox\"}" \
-            "$DISCORD_WEBHOOK_URL"
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions Bot"
+          git add links/ssh.txt world_backup.zip
+          git commit -m "Auto backup & SSH update $(date -u)" || echo "No changes to commit"
+          git push
 
       - name: Keep VPS alive for 6 hours
         run: sleep 21600
