@@ -1,0 +1,62 @@
+name: Minecraft VPS Auto Start with Dropbox Backup & Discord Notify
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *' # every 6 hours
+
+jobs:
+  minecraft-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Install Dropbox Uploader
+      run: |
+        git clone https://github.com/andreafabrizi/Dropbox-Uploader.git
+        sudo cp Dropbox-Uploader/dropbox_uploader.sh /usr/local/bin/dropbox_uploader.sh
+        chmod +x /usr/local/bin/dropbox_uploader.sh
+        echo "OAUTH_ACCESS_TOKEN=${{ secrets.DROPBOX_TOKEN }}" > ~/.dropbox_uploader
+
+    - name: Start Minecraft Server
+      run: |
+        sudo apt update && sudo apt install -y screen openjdk-17-jre wget
+        mkdir -p server && cd server
+        wget https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar -O paper.jar
+        echo "eula=true" > eula.txt
+        screen -dmS minecraft java -Xmx2G -Xms2G -jar paper.jar nogui
+
+    - name: Setup SSH Access
+      uses: mxschmitt/action-tmate@v3
+      timeout-minutes: 350
+      with:
+        limit-access-to-actor: false
+
+    - name: Get SSH link and notify Discord
+      id: get-ssh
+      run: |
+        for i in {1..30}; do
+          SSH_LINK=$(tmate show-ssh 2>/dev/null || true)
+          if [[ "$SSH_LINK" == ssh* ]]; then
+            echo "ssh_link=$SSH_LINK" >> $GITHUB_OUTPUT
+            break
+          fi
+          sleep 2
+        done
+
+        if [ -z "${{ steps.get-ssh.outputs.ssh_link }}" ]; then
+          echo "❌ SSH link not found"
+          exit 3
+        fi
+
+        curl -H "Content-Type: application/json" \
+             -X POST \
+             -d "{\"content\": \"✅ Minecraft VPS is ready! SSH: ${{ steps.get-ssh.outputs.ssh_link }}\"}" \
+             ${{ secrets.DISCORD_WEBHOOK }}
+
+    - name: Backup to Dropbox
+      run: |
+        /usr/local/bin/dropbox_uploader.sh upload server/ /MinecraftVPSBackup/
