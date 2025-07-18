@@ -1,0 +1,68 @@
+name: Create VPS
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # every 6 hours UTC
+  repository_dispatch:
+    types: [create-vps]
+
+jobs:
+  start-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v3
+
+      - name: 💾 Restore from Dropbox (if enabled)
+        run: |
+          pip install dropbox
+          python dropbox_helper.py download world.zip /tmp/world.zip || echo "No backup found"
+          if [ -f /tmp/world.zip ]; then
+            unzip /tmp/world.zip -d ./ || echo "Extract failed"
+          fi
+        env:
+          DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
+
+      - name: 🔐 Start tmate SSH session
+        run: |
+          sudo apt update
+          sudo apt install -y tmate openjdk-17-jre-headless unzip wget
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          echo "$SSH" > "links/ssh.txt"
+          echo "✅ SSH: $SSH"
+
+      - name: ⛏️ Setup Minecraft Server (Paper 1.20.1)
+        run: |
+          mkdir -p minecraft
+          cd minecraft
+          wget https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar -O server.jar
+          echo "eula=true" > eula.txt
+          echo "java -Xmx2G -Xms2G -jar server.jar nogui" > start.sh
+          chmod +x start.sh
+
+      - name: ▶️ Start Minecraft Server
+        run: |
+          cd minecraft
+          ./start.sh &
+          sleep 60
+
+      - name: 💾 Backup Minecraft World to Dropbox
+        run: |
+          cd minecraft
+          zip -r /tmp/world.zip world || echo "World folder missing"
+          cd ..
+          pip install dropbox
+          python dropbox_helper.py upload /tmp/world.zip world.zip
+        env:
+          DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
+
+      - name: 📤 Push SSH info
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🔁 Auto VPS SSH info"
+          file_pattern: 'links/ssh.txt'
