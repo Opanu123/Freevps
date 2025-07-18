@@ -1,0 +1,74 @@
+name: Create VPS
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"  # 🔁 Auto start every 6 hours (UTC)
+  repository_dispatch:
+    types: [create-vps]
+
+jobs:
+  start-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v3
+
+      - name: 🔐 Install Dropbox SDK
+        run: pip install dropbox
+
+      - name: 📁 Prepare dirs
+        run: mkdir -p links .backup
+
+      - name: 💾 Restore backup from Dropbox
+        env:
+          DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
+        run: |
+          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
+          python3 dropbox.py download "/$name.zip" ".backup/$name.zip" || echo "No Dropbox backup"
+          unzip ".backup/$name.zip" -d . || echo "⚠️ No backup to extract"
+
+      - name: 🔐 Start tmate SSH
+        run: |
+          sudo apt update && sudo apt install -y tmate
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          echo "$SSH" > "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "✅ SSH Ready: $SSH"
+          echo "🔁 $(date)" > .backup/.force-update.txt  # Ensure Git sees change
+          echo "$SSH"
+
+      - name: 🔁 Backup and upload to Dropbox
+        env:
+          DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
+        run: |
+          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
+          zip -r ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*"
+          python3 dropbox.py upload ".backup/$name.zip" "/$name.zip"
+
+      - name: 🔃 Push to GitHub
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🔁 VPS + backup update: ${{ github.event.client_payload.vps_name || 'manual-vps' }}"
+          file_pattern: |
+            links/*.txt
+            .backup/*.zip
+            .backup/.force-update.txt
+
+      - name: 📩 Notify Discord
+        if: env.DISCORD_WEBHOOK != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          msg="✅ VPS Ready: SSH session for ${{ github.event.client_payload.vps_name || 'manual-vps' }}\n"
+          msg+="$(cat links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt)"
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d "{\"content\":\"$msg\"}" \
+               "$DISCORD_WEBHOOK"
+
+      - name: 💤 Keep alive 6 hours
+        run: sleep $((360 * 60))
