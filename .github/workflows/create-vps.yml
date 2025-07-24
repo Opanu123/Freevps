@@ -1,0 +1,66 @@
+name: Auto VPS with GDrive Backup
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # Every 6 hours
+  workflow_dispatch:        # Manual trigger
+
+jobs:
+  start-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 370  # 6 hours + buffer
+
+    steps:
+      - name: ⬇️ Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: 📁 Create directories
+        run: mkdir -p links .backup
+
+      - name: 🔁 Restore from Google Drive via Rclone
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+
+          name="autovps"
+          if rclone ls gdrive:backups/$name.zip > /dev/null 2>&1; then
+            echo "📦 Restoring backup from Google Drive..."
+            rclone copy gdrive:backups/$name.zip .
+            unzip -o "$name.zip" -d . || echo "❌ Failed to unzip backup"
+          else
+            echo "⚠️ No backup found. Starting fresh."
+          fi
+
+      - name: 🔐 Start tmate (SSH Access)
+        run: |
+          sudo apt update && sudo apt install -y tmate
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          echo "$SSH" > links/autovps.txt
+          echo "✅ SSH Ready: $SSH"
+
+      - name: 📄 Commit SSH info to repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🔁 Updated SSH link"
+          file_pattern: 'links/*.txt'
+
+      - name: 💾 Backup & Upload to Google Drive
+        if: always()
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+
+          name="autovps"
+          zip -r "$name.zip" . -x ".git/*" ".github/*" "links/*"
+          rclone copy "$name.zip" gdrive:backups || echo "❌ Failed to upload backup"
+
+      - name: ⏳ Keep VPS Alive
+        run: |
+          echo "⏳ Sleeping for 6 hours..."
+          sleep 21600
